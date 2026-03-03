@@ -1,6 +1,8 @@
-import csv
+# import csv
+from fileinput import filename
 import time
 from collections import deque
+from supabase import create_client
 
 import numpy as np
 import serial
@@ -18,6 +20,13 @@ TD_PORT = 7000
 CALIB_SECONDS = 20
 WINDOW_SECONDS = 60
 SEND_HZ = 50
+
+# ---- CONNECT TO SUPABASE ----
+SUPABASE_URL = "https://npqjepvydeaauwsymkbu.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wcWplcHZ5ZGVhYXV3c3lta2J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMjg4NzAsImV4cCI6MjA4NzYwNDg3MH0.5S2yGI80P9xsnMK8fWv1ErSE4aPxLL3Qqk0flVThyq0"
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 # ---- Normalization drift-adaptation ----
 DRIFT_UPDATE_MIN_SAMPLES = 200
@@ -82,14 +91,14 @@ def main():
 
     t0 = time.time()
 
-    filename = f"breath_log_{int(time.time())}.csv"
-    f = open(filename, "w", newline="")
-    writer = csv.writer(f)
-    writer.writerow([
-        "t_sec", "raw", "norm", "fast", "slow",
-        "baseline", "x", "hyst",
-        "state", "bpm_win", "bpm_inst", "period", "score", "opacity"
-    ])
+    # filename = f"breath_log_{int(time.time())}.csv"
+    # f = open(filename, "w", newline="")
+    # writer = csv.writer(f)
+    # writer.writerow([
+    #     "t_sec", "raw", "norm", "fast", "slow",
+    #     "baseline", "x", "hyst",
+    #     "state", "bpm_win", "bpm_inst", "period", "score", "opacity"
+    # ])
 
     # ---------- Calibration ----------
     calib_buf = []
@@ -137,6 +146,10 @@ def main():
     opacity_sm = None
     opacity = 1.0
 
+    db_buffer = []
+    last_db_send = time.time()
+    DB_SEND_INTERVAL = 0.5  # send once per 0.5 second
+
     try:
         while True:
             line = ser.readline().decode(errors="ignore").strip()
@@ -150,6 +163,22 @@ def main():
 
             t = time.time()
             t_sec = t - t0
+
+            participant_id = int(time.strftime("%Y%m%d%H%M%S"))
+            print("Participant ID:", participant_id)
+            db_buffer.append({
+                "participant_id": participant_id,
+                "t_sec": t_sec,
+                "raw": raw,
+            })
+            if time.time() - last_db_send >= DB_SEND_INTERVAL and db_buffer:
+                try:
+                    supabase.table("breath_raw").insert(db_buffer).execute()
+                except Exception as e:
+                    print("Database error:", e)
+
+            db_buffer.clear()
+            last_db_send = time.time()
 
             # -------- CALIBRATION --------
             if calibrating:
@@ -344,23 +373,23 @@ def main():
                 osc.send_message("/breath/hyst", float(hyst))
                 osc.send_message("/breath/dx", float(dxs))
 
-            # -------- CSV --------
-            writer.writerow([
-                t_sec, raw, norm,
-                float(fast_ema), float(slow_ema),
-                float(base_ema), float(x), float(hyst),
-                1 if breath_state == "inhale" else 0,
-                bpm_win, bpm_inst, period_mean, rhythm_score, opacity
-            ])
+            # # -------- CSV --------
+            # writer.writerow([
+            #     t_sec, raw, norm,
+            #     float(fast_ema), float(slow_ema),
+            #     float(base_ema), float(x), float(hyst),
+            #     1 if breath_state == "inhale" else 0,
+            #     bpm_win, bpm_inst, period_mean, rhythm_score, opacity
+            # ])
 
     except KeyboardInterrupt:
         print("Stopping...")
 
     finally:
-        f.close()
+        # f.close()
         ser.close()
-        print("Saved:", filename)
+        # print("Saved:", filename)
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
