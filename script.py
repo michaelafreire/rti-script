@@ -89,6 +89,9 @@ def main():
 
     osc = SimpleUDPClient(TD_IP, TD_PORT)
 
+    participant_id = int(time.strftime("%Y%m%d%H%M%S"))
+    print("Participant ID:", participant_id)
+
     t0 = time.time()
 
     # filename = f"breath_log_{int(time.time())}.csv"
@@ -164,8 +167,6 @@ def main():
             t = time.time()
             t_sec = t - t0
 
-            participant_id = int(time.strftime("%Y%m%d%H%M%S"))
-            print("Participant ID:", participant_id)
             db_buffer.append({
                 "participant_id": participant_id,
                 "t_sec": t_sec,
