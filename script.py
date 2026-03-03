@@ -1,6 +1,8 @@
-import csv
+# import csv
+from fileinput import filename
 import time
 from collections import deque
+from supabase import create_client
 
 import numpy as np
 import serial
@@ -16,6 +18,12 @@ TD_PORT = 7000
 CALIB_SECONDS = 20
 WINDOW_SECONDS = 60
 SEND_HZ = 50
+
+# ---- CONNECT TO SUPABASE ----
+SUPABASE_URL = "https://npqjepvydeaauwsymkbu.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wcWplcHZ5ZGVhYXV3c3lta2J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMjg4NzAsImV4cCI6MjA4NzYwNDg3MH0.5S2yGI80P9xsnMK8fWv1ErSE4aPxLL3Qqk0flVThyq0"
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- BPM (60s rolling window) ---
 BPM_WINDOW_SEC = 60.0
@@ -63,10 +71,10 @@ def main():
 
     t0 = time.time()
 
-    filename = f"breath_log_{int(time.time())}.csv"
-    f = open(filename, "w", newline="")
-    writer = csv.writer(f)
-    writer.writerow(["t_sec", "raw"])
+    # filename = f"breath_log_{int(time.time())}.csv"
+    # f = open(filename, "w", newline="")
+    # writer = csv.writer(f)
+    # writer.writerow(["t_sec", "raw"])
 
     calib_buf = []
     calib_start = time.time()
@@ -96,6 +104,11 @@ def main():
     opacity_sm = None
     opacity = 1.0
 
+    # --- Buffer to save data to SupaBase ---
+    db_buffer = []
+    last_db_send = time.time()
+    DB_SEND_INTERVAL = 0.5  # send once per 0.5 second
+
     try:
         while True:
             line = ser.readline().decode(errors="ignore").strip()
@@ -109,7 +122,22 @@ def main():
 
             t = time.time()
             t_sec = t - t0
-            writer.writerow([t_sec, raw])
+            participant_id = int(time.strftime("%Y%m%d%H%M%S"))
+            print("Participant ID:", participant_id)
+            # writer.writerow([t_sec, raw])
+            db_buffer.append({
+                "participant_id": participant_id,
+                "t_sec": t_sec,
+                "raw": raw,
+            })
+            if time.time() - last_db_send >= DB_SEND_INTERVAL and db_buffer:
+                try:
+                    supabase.table("breath_raw").insert(db_buffer).execute()
+                except Exception as e:
+                    print("Database error:", e)
+
+            db_buffer.clear()
+            last_db_send = time.time()
 
             # -------- CALIBRATION --------
             if calibrating:
@@ -250,10 +278,9 @@ def main():
         print("Stopping...")
 
     finally:
-        f.close()
+        # f.close()
         ser.close()
-        print("Saved:", filename)
-
+        # print("Saved:", filename)
 
 if __name__ == "__main__":
     main()
