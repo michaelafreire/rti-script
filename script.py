@@ -23,9 +23,13 @@ SEND_HZ = 50
 
 # ---- CONNECT TO SUPABASE ----
 SUPABASE_URL = "https://npqjepvydeaauwsymkbu.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wcWplcHZ5ZGVhYXV3c3lta2J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMjg4NzAsImV4cCI6MjA4NzYwNDg3MH0.5S2yGI80P9xsnMK8fWv1ErSE4aPxLL3Qqk0flVThyq0"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wcWplcHZ5ZGVhYXV3c3lta2J1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjAyODg3MCwiZXhwIjoyMDg3NjA0ODcwfQ.CD_C9QjkSvIQ3U-t6C4b9B6gw85lt-PQGOcv9rLQsbY"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ---- CREATE PARTICIPANT ID ----
+participant_id = int(time.strftime("%Y%m%d%H%M%S"))
+print("Participant ID:", participant_id)
 
 
 # ---- Normalization drift-adaptation ----
@@ -148,7 +152,7 @@ def main():
 
     db_buffer = []
     last_db_send = time.time()
-    DB_SEND_INTERVAL = 0.5  # send once per 0.5 second
+    DB_SEND_INTERVAL = 0.2  # send once per 0.2 second
 
     try:
         while True:
@@ -164,23 +168,24 @@ def main():
             t = time.time()
             t_sec = t - t0
 
-            # participant_id = int(time.strftime("%Y%m%d%H%M%S"))
-            # print("Participant ID:", participant_id)
+            db_buffer.append(raw)
 
-            # db_buffer.append({
-            #     "participant_id": participant_id,
-            #     "t_sec": t_sec,
-            #     "raw": raw,
-            # })
+            if time.time() - last_db_send >= DB_SEND_INTERVAL and db_buffer:
+                try:
+                    avg_raw = float(np.mean(db_buffer))  # average all readings in buffer
+                    t_flush = time.time() - t0            # timestamp for this interval
+                    row = {
+                        "participant_id": participant_id,
+                        "t_sec": t_flush,
+                        "raw": avg_raw
+                    }
+                    supabase.table("breath_raw").insert([row]).execute()
+                    print("Sent to DB:", row)  # optional for debugging
+                    db_buffer.clear()
+                    last_db_send = time.time()
+                except Exception as e:
+                    print("Database error:", e)
 
-            # if time.time() - last_db_send >= DB_SEND_INTERVAL and db_buffer:
-            #     try:
-            #         supabase.table("breath_raw").insert(db_buffer).execute()
-            #     except Exception as e:
-            #         print("Database error:", e)
-
-            #     db_buffer.clear()
-            #     last_db_send = time.time()
 
             # -------- CALIBRATION --------
             if calibrating:
