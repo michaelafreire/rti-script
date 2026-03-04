@@ -23,7 +23,7 @@ SEND_HZ = 50
 
 # ---- CONNECT TO SUPABASE ----
 SUPABASE_URL = "https://npqjepvydeaauwsymkbu.supabase.co"
-SUPABASE_KEY = ""
+# SUPABASE_KEY = ""
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
