@@ -160,6 +160,12 @@ def main():
     last_db_send = time.time()
     DB_SEND_INTERVAL = 0.1
 
+    # ---------- LOCAL CSV FOR DEPTH (MEAN ΔP) ----------
+    continuous_filename = f"breath_continuous_{participant_id}.csv"
+    continuous_file = open(continuous_filename, "w", newline="")
+    continuous_writer = csv.writer(continuous_file)
+    continuous_writer.writerow(["t_sec", "norm", "breath_state"])
+
     try:
         while True:
             line = ser.readline().decode(errors="ignore").strip()
@@ -391,6 +397,9 @@ def main():
                 osc.send_message("/breath/hyst", float(hyst))
                 osc.send_message("/breath/dx", float(dxs))
 
+                # -------- LOCAL SAVE: DEPTH --------
+                continuous_writer.writerow([round(t_sec, 3), round(norm, 3), breath_state])
+
     except KeyboardInterrupt:
         print("Stopping...")
 
@@ -428,6 +437,10 @@ def main():
                     rec["breath_count"],
                     rec["bpm_minute"]
                 ])
+
+        # -------- CLOSE DEPTH CSV --------
+        continuous_file.close()
+        print(f"Saved continuous depth to {continuous_filename}")
 
         ser.close()
         print(f"Saved inhale events to {events_filename}")
