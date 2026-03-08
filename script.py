@@ -11,6 +11,7 @@ from pythonosc.udp_client import SimpleUDPClient
 # =========================
 SERIAL_PORT = "COM4"
 BAUD = 9600
+print("it is pulled!")
 
 TD_IP = "127.0.0.1"
 TD_PORT = 7000
@@ -56,6 +57,9 @@ BPM_WINDOW_SEC = 20.0   # rolling window for opacity feedback
 # ---- Opacity smoothing ----
 OPACITY_ATTACK = 0.20
 OPACITY_RELEASE = 0.20
+
+# ---- Visual smoothing (separate from detection) ----
+VISUAL_ALPHA = 0.025
 
 
 def ema(prev, x, alpha):
@@ -111,6 +115,7 @@ def main():
     # ---------- Filters ----------
     fast_ema = None
     slow_ema = None
+    visual_sm = None
 
     # ---------- Window for drift-adaptation ----------
     window = deque(maxlen=WINDOW_SECONDS * SEND_HZ)
@@ -173,13 +178,16 @@ def main():
 
                 fast_ema = ema(fast_ema, tmp, alpha=0.35)
                 slow_ema = ema(slow_ema, tmp, alpha=0.05)
+                visual_sm = ema(visual_sm, tmp, alpha=VISUAL_ALPHA)
 
                 # Send temporary data so visuals can still react
                 if t - last_send >= send_period:
                     last_send = t
-                    osc.send_message("/fsr/raw", float(tmp))
+                    osc.send_message("/fsr/raw", float(visual_sm))
                     osc.send_message("/fsr/fast", float(fast_ema))
                     osc.send_message("/fsr/slow", float(slow_ema))
+                    osc.send_message("/fsr/visual", float(visual_sm))
+
                     osc.send_message("/breath/state", 0)
                     osc.send_message("/breath/inhale_event", 0)
                     osc.send_message("/breath/bpm", 0.0)
@@ -228,6 +236,8 @@ def main():
 
             fast_ema = ema(fast_ema, norm, alpha=0.35)
             slow_ema = ema(slow_ema, norm, alpha=0.05)
+            visual_sm = ema(visual_sm, norm, alpha=VISUAL_ALPHA)
+
             sig = float(slow_ema)
 
             # -------- BASELINE + RELATIVE SIGNAL x --------
@@ -318,9 +328,11 @@ def main():
             if t - last_send >= send_period:
                 last_send = t
 
-                osc.send_message("/fsr/raw", float(norm))
+                # visual signal is now separate
+                osc.send_message("/fsr/raw", float(visual_sm))
                 osc.send_message("/fsr/fast", float(fast_ema))
                 osc.send_message("/fsr/slow", float(slow_ema))
+                osc.send_message("/fsr/visual", float(visual_sm))
 
                 osc.send_message("/breath/state", 1 if breath_state == "inhale" else 0)
                 osc.send_message("/breath/inhale_event", 1 if inhale_event else 0)
