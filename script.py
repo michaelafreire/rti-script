@@ -1,3 +1,4 @@
+import csv
 from collections import deque
 import time
 
@@ -53,6 +54,7 @@ MIN_BREATH_INTERVAL = 0.8
 
 # ---- BPM window ----
 BPM_WINDOW_SEC = 20.0   # rolling window for opacity feedback
+MINUTE_SEC = 60.0       # post hoc minute-by-minute BPM bins
 
 # ---- Opacity smoothing ----
 OPACITY_ATTACK = 0.20
@@ -134,6 +136,14 @@ def main():
     # inhale-start event timestamps for BPM window
     inhale_events = deque()
 
+    # ---------- Post hoc event + minute tracking ----------
+    inhale_event_times = []   # exact inhale onset timestamps (in seconds from t0)
+
+    current_minute_index = 0
+    current_minute_count = 0
+    minute_records = []
+    last_completed_minute_bpm = 0.0
+
     # ---------- OSC send timing ----------
     last_send = 0.0
     send_period = 1.0 / SEND_HZ
@@ -164,6 +174,35 @@ def main():
             t = time.time()
             t_sec = t - t0
 
+            # -------- Finalize completed minute bins --------
+            minute_index = int(t_sec // MINUTE_SEC)
+            if minute_index > current_minute_index:
+                # finalize the previous minute
+                minute_records.append({
+                    "participant_id": participant_id,
+                    "minute_index": current_minute_index + 1,
+                    "start_sec": current_minute_index * MINUTE_SEC,
+                    "end_sec": (current_minute_index + 1) * MINUTE_SEC,
+                    "breath_count": current_minute_count,
+                    "bpm_minute": float(current_minute_count)
+                })
+                last_completed_minute_bpm = float(current_minute_count)
+
+                # fill fully skipped empty minutes, if any
+                for skipped_idx in range(current_minute_index + 1, minute_index):
+                    minute_records.append({
+                        "participant_id": participant_id,
+                        "minute_index": skipped_idx + 1,
+                        "start_sec": skipped_idx * MINUTE_SEC,
+                        "end_sec": (skipped_idx + 1) * MINUTE_SEC,
+                        "breath_count": 0,
+                        "bpm_minute": 0.0
+                    })
+                    last_completed_minute_bpm = 0.0
+
+                current_minute_index = minute_index
+                current_minute_count = 0
+
             # -------- CALIBRATION --------
             if calibrating:
                 elapsed = t - calib_start
@@ -191,6 +230,7 @@ def main():
                     osc.send_message("/breath/state", 0)
                     osc.send_message("/breath/inhale_event", 0)
                     osc.send_message("/breath/bpm", 0.0)
+                    osc.send_message("/breath/bpm_minute", float(last_completed_minute_bpm))
                     osc.send_message("/breath/opacity", 1.0)
 
                 if elapsed >= CALIB_SECONDS and len(calib_buf) > 50:
@@ -303,6 +343,10 @@ def main():
                     last_inhale_event_t = t
                     inhale_events.append(t)
 
+                    # post hoc logging
+                    inhale_event_times.append(t_sec)
+                    current_minute_count += 1
+
             else:  # inhale
                 if x < -hyst and dxs < -FALL_SLOPE_TH:
                     breath_state = "exhale"
@@ -338,6 +382,7 @@ def main():
                 osc.send_message("/breath/inhale_event", 1 if inhale_event else 0)
 
                 osc.send_message("/breath/bpm", float(bpm_win))
+                osc.send_message("/breath/bpm_minute", float(last_completed_minute_bpm))
                 osc.send_message("/breath/opacity", float(opacity))
 
                 # Debug channels
@@ -350,7 +395,43 @@ def main():
         print("Stopping...")
 
     finally:
+        # finalize the currently open minute bin
+        final_t_sec = time.time() - t0
+        minute_records.append({
+            "participant_id": participant_id,
+            "minute_index": current_minute_index + 1,
+            "start_sec": current_minute_index * MINUTE_SEC,
+            "end_sec": final_t_sec,
+            "breath_count": current_minute_count,
+            "bpm_minute": float(current_minute_count)
+        })
+
+        # write inhale event timestamps
+        events_filename = f"breath_events_{participant_id}.csv"
+        with open(events_filename, "w", newline="") as ef:
+            writer = csv.writer(ef)
+            writer.writerow(["participant_id", "inhale_event_t_sec"])
+            for ev_t in inhale_event_times:
+                writer.writerow([participant_id, ev_t])
+
+        # write minute-by-minute BPM summary
+        minutes_filename = f"breath_minute_bpm_{participant_id}.csv"
+        with open(minutes_filename, "w", newline="") as mf:
+            writer = csv.writer(mf)
+            writer.writerow(["participant_id", "minute_index", "start_sec", "end_sec", "breath_count", "bpm_minute"])
+            for rec in minute_records:
+                writer.writerow([
+                    rec["participant_id"],
+                    rec["minute_index"],
+                    rec["start_sec"],
+                    rec["end_sec"],
+                    rec["breath_count"],
+                    rec["bpm_minute"]
+                ])
+
         ser.close()
+        print(f"Saved inhale events to {events_filename}")
+        print(f"Saved minute BPM summary to {minutes_filename}")
 
 
 if __name__ == "__main__":
