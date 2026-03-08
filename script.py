@@ -140,8 +140,10 @@ def main():
 
     # ---------- DB buffer ----------
     db_buffer = []
+    db_buffer_norm = []
+    db_buffer_wave = []
     last_db_send = time.time()
-    DB_SEND_INTERVAL = 0.2
+    DB_SEND_INTERVAL = 0.1
 
     try:
         while True:
@@ -156,24 +158,6 @@ def main():
 
             t = time.time()
             t_sec = t - t0
-
-            # -------- DB WRITE (raw only) --------
-            db_buffer.append(raw)
-
-            if time.time() - last_db_send >= DB_SEND_INTERVAL and db_buffer:
-                try:
-                    avg_raw = float(np.mean(db_buffer))
-                    t_flush = time.time() - t0
-                    row = {
-                        "participant_id": participant_id,
-                        "t_sec": t_flush,
-                        "raw": avg_raw
-                    }
-                    supabase.table("breath_raw").insert([row]).execute()
-                    db_buffer.clear()
-                    last_db_send = time.time()
-                except Exception as e:
-                    print("Database error:", e)
 
             # -------- CALIBRATION --------
             if calibrating:
@@ -252,6 +236,32 @@ def main():
 
             # If direction is inverted in your setup, uncomment this:
             # x = -x
+
+            # -------- DB WRITE --------
+            db_buffer.append(raw)
+            db_buffer_norm.append(sig)
+            db_buffer_wave.append(x)
+
+            if time.time() - last_db_send >= DB_SEND_INTERVAL and db_buffer:
+                try:
+                    avg_raw = float(np.mean(db_buffer))
+                    avg_norm = float(np.mean(db_buffer_norm))
+                    avg_wave = float(np.mean(db_buffer_wave))
+                    t_flush = time.time() - t0
+                    row = {
+                        "participant_id": participant_id,
+                        "t_sec": t_flush,
+                        "raw": avg_raw,
+                        "norm": avg_norm,
+                        "wave": avg_wave
+                    }
+                    supabase.table("breath_raw").insert([row]).execute()
+                    db_buffer.clear()
+                    db_buffer_norm.clear()
+                    db_buffer_wave.clear()
+                    last_db_send = time.time()
+                except Exception as e:
+                    print("Database error:", e)
 
             # -------- DYNAMIC HYSTERESIS --------
             amp_ema = ema(amp_ema, abs(x), AMP_ALPHA)
