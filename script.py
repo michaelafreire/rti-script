@@ -2,7 +2,6 @@ import csv
 from collections import deque
 import time
 
-from supabase import create_client
 import numpy as np
 import serial
 from pythonosc.udp_client import SimpleUDPClient
@@ -55,11 +54,11 @@ OPACITY_ATTACK = 0.20
 OPACITY_RELEASE = 0.20
 
 # ---- Visual smoothing ----
-VISUAL_ALPHA = 0.15   # 0.025 yerine daha hızlı ve stabil
+VISUAL_ALPHA = 0.15
 
 # ---- Stabil post-calibration guard ----
-POST_CALM_SECONDS = 1.0   # calibration sonrası kısa oturma süresi
-USE_DRIFT_ADAPTATION = False  # sphere stabilitesi için kapalı
+POST_CALM_SECONDS = 1.0
+USE_DRIFT_ADAPTATION = False
 
 
 def ema(prev, x, alpha):
@@ -121,9 +120,7 @@ def main():
     # inhale-start event timestamps for BPM window
     inhale_events = deque()
 
-    # ---------- Post hoc event + minute tracking ----------
-    inhale_event_times = []
-
+    # ---------- Minute tracking ----------
     current_minute_index = 0
     current_minute_count = 0
     minute_records = []
@@ -138,18 +135,12 @@ def main():
     opacity_sm = None
     opacity = 1.0
 
-    # ---------- DB buffer ----------
-    db_buffer = []
-    db_buffer_norm = []
-    db_buffer_wave = []
-    last_db_send = time.time()
-    DB_SEND_INTERVAL = 0.1
-
-
-
     # ---------- Debug print timing ----------
     last_debug_print = 0.0
     DEBUG_PRINT_EVERY = 0.25
+
+    # ---------- New debug-data storage ----------
+    debug_records = []
 
     try:
         while True:
@@ -200,7 +191,6 @@ def main():
                 osc.send_message("/calib/elapsed", float(elapsed))
                 osc.send_message("/calib/active", 1)
 
-                # Temporary normalized signal during calibration
                 tmp = (raw - 40.0) / (300.0 - 40.0)
                 tmp = max(0.0, min(1.0, tmp))
 
@@ -243,7 +233,6 @@ def main():
                     osc.send_message("/calib/low", float(low))
                     osc.send_message("/calib/high", float(high))
 
-                    # CRITICAL RESET
                     fast_ema = None
                     slow_ema = None
                     visual_sm = None
@@ -257,7 +246,6 @@ def main():
                     inhale_events.clear()
                     last_inhale_event_t = None
 
-                    # optional: seed drift window with calibration values
                     window.clear()
                     for v in calib_buf[-window.maxlen:]:
                         window.append(v)
@@ -266,7 +254,6 @@ def main():
 
             # -------- SHORT POST-CALIBRATION CALM PERIOD --------
             if calib_end_time is not None and (t - calib_end_time) < POST_CALM_SECONDS:
-                # kalibrasyon sonrası state'lerin oturması için çok kısa süre
                 norm = (raw - low) / max(1e-6, (high - low))
                 norm = max(0.0, min(1.0, norm))
 
@@ -306,9 +293,8 @@ def main():
             norm = (raw - low) / denom
             norm = max(0.0, min(1.0, norm))
 
-            # sphere için daha stabil görsel yol
             fast_ema = ema(fast_ema, norm, alpha=0.35)
-            slow_ema = ema(slow_ema, norm, alpha=0.12)      # 0.05 yerine biraz hızlandırıldı
+            slow_ema = ema(slow_ema, norm, alpha=0.12)
             visual_sm = ema(visual_sm, norm, alpha=VISUAL_ALPHA)
 
             sig = float(slow_ema)
@@ -345,8 +331,6 @@ def main():
                     inhale_event = True
                     last_inhale_event_t = t
                     inhale_events.append(t)
-
-                    inhale_event_times.append(t_sec)
                     current_minute_count += 1
             else:
                 if x < -hyst and dxs < -FALL_SLOPE_TH:
@@ -368,6 +352,24 @@ def main():
                 opacity_sm = exp_smooth(opacity_sm, opacity_target, a)
 
             opacity = float(opacity_sm)
+
+            # -------- Save every processed sample to debug CSV buffer --------
+            debug_records.append({
+                "participant_id": participant_id,
+                "t_sec": t_sec,
+                "raw": raw,
+                "low": low,
+                "high": high,
+                "norm": norm,
+                "visual": float(visual_sm),
+                "x": float(x),
+                "hyst": float(hyst),
+                "dx": float(dxs),
+                "breath_state": breath_state,
+                "inhale_event": int(inhale_event),
+                "bpm_window": float(bpm_win),
+                "opacity": float(opacity)
+            })
 
             # -------- DEBUG PRINT --------
             if t - last_debug_print >= DEBUG_PRINT_EVERY:
@@ -413,12 +415,31 @@ def main():
             "bpm_minute": float(current_minute_count)
         })
 
-        events_filename = f"breath_events_{participant_id}.csv"
-        with open(events_filename, "w", newline="") as ef:
-            writer = csv.writer(ef)
-            writer.writerow(["participant_id", "inhale_event_t_sec"])
-            for ev_t in inhale_event_times:
-                writer.writerow([participant_id, ev_t])
+        debug_filename = f"breath_debug_{participant_id}.csv"
+        with open(debug_filename, "w", newline="") as df:
+            writer = csv.writer(df)
+            writer.writerow([
+                "participant_id", "t_sec", "raw", "low", "high", "norm",
+                "visual", "x", "hyst", "dx", "breath_state",
+                "inhale_event", "bpm_window", "opacity"
+            ])
+            for rec in debug_records:
+                writer.writerow([
+                    rec["participant_id"],
+                    rec["t_sec"],
+                    rec["raw"],
+                    rec["low"],
+                    rec["high"],
+                    rec["norm"],
+                    rec["visual"],
+                    rec["x"],
+                    rec["hyst"],
+                    rec["dx"],
+                    rec["breath_state"],
+                    rec["inhale_event"],
+                    rec["bpm_window"],
+                    rec["opacity"]
+                ])
 
         minutes_filename = f"breath_minute_bpm_{participant_id}.csv"
         with open(minutes_filename, "w", newline="") as mf:
@@ -434,29 +455,8 @@ def main():
                     rec["bpm_minute"]
                 ])
 
-        # # ---- CONNECT TO SUPABASE ----
-        # SUPABASE_URL = "https://mgcesnjdswtzcnxsqovi.supabase.co"
-        # SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nY2Vzbmpkc3d0emNueHNxb3ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MzY3OTYsImV4cCI6MjA4ODIxMjc5Nn0.BTBtWstvyDeJj5L_0_5tfoAQvNN2lYlWAwH8-lfzX3Q"
-
-        # supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-        # try:
-        #     # Upload inhale events
-        #     inhale_rows = [{"participant_id": participant_id, "inhale_event_t_sec": ev_t} for ev_t in inhale_event_times]
-        #     if inhale_rows:
-        #         supabase.table("breath_events").insert(inhale_rows).execute()
-
-        #     # Upload minute records
-        #     if minute_records:
-        #         supabase.table("breath_minute_bpm").insert(minute_records).execute()
-
-        #     print("Supabase upload done!")
-
-        # except Exception as e:
-        #     print("Supabase upload failed:", e)
-
         ser.close()
-        print(f"Saved inhale events to {events_filename}")
+        print(f"Saved debug data to {debug_filename}")
         print(f"Saved minute BPM summary to {minutes_filename}")
 
 
