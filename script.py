@@ -12,7 +12,7 @@ from pythonosc.udp_client import SimpleUDPClient
 # =========================
 SERIAL_PORT = "COM4"
 BAUD = 9600
-print("it is pulled!")
+print("it is pulled again!")
 
 TD_IP = "127.0.0.1"
 TD_PORT = 7000
@@ -53,15 +53,19 @@ DSIG_EMA_ALPHA = 0.25
 MIN_BREATH_INTERVAL = 0.8
 
 # ---- BPM window ----
-BPM_WINDOW_SEC = 20.0   # rolling window for opacity feedback
-MINUTE_SEC = 60.0       # post hoc minute-by-minute BPM bins
+BPM_WINDOW_SEC = 20.0
+MINUTE_SEC = 60.0
 
 # ---- Opacity smoothing ----
 OPACITY_ATTACK = 0.20
 OPACITY_RELEASE = 0.20
 
-# ---- Visual smoothing (separate from detection) ----
-VISUAL_ALPHA = 0.025
+# ---- Visual smoothing ----
+VISUAL_ALPHA = 0.15   # 0.025 yerine daha hızlı ve stabil
+
+# ---- Stabil post-calibration guard ----
+POST_CALM_SECONDS = 1.0   # calibration sonrası kısa oturma süresi
+USE_DRIFT_ADAPTATION = False  # sphere stabilitesi için kapalı
 
 
 def ema(prev, x, alpha):
@@ -73,31 +77,17 @@ def exp_smooth(prev, x, a):
 
 
 def bpm_to_opacity(bpm):
-    """
-    Desired mapping:
-    - 5 to 7 BPM -> 1.0
-    - 15 BPM -> ~0.8
-    - 20 BPM -> ~0.6
-    - 25 BPM -> ~0.3
-    - higher -> approaches 0.1
-    Also gives lower opacity for very slow breathing (<5 BPM).
-    """
     if 5.0 <= bpm <= 7.0:
         return 1.0
     elif bpm < 5.0:
-        # 0 BPM -> 0.3, 5 BPM -> 1.0
         return max(0.3, 0.3 + (bpm / 5.0) * 0.7)
     elif bpm <= 15.0:
-        # 7 -> 1.0, 15 -> 0.8
         return 1.0 - (bpm - 7.0) * (0.2 / 8.0)
     elif bpm <= 20.0:
-        # 15 -> 0.8, 20 -> 0.6
         return 0.8 - (bpm - 15.0) * (0.2 / 5.0)
     elif bpm <= 25.0:
-        # 20 -> 0.6, 25 -> 0.3
         return 0.6 - (bpm - 20.0) * (0.3 / 5.0)
     else:
-        # 25+ -> continue dimming, but not below 0.1
         return max(0.1, 0.3 - (bpm - 25.0) * 0.04)
 
 
@@ -113,6 +103,7 @@ def main():
     calib_start = time.time()
     calibrating = True
     low, high = None, None
+    calib_end_time = None
 
     # ---------- Filters ----------
     fast_ema = None
@@ -137,7 +128,7 @@ def main():
     inhale_events = deque()
 
     # ---------- Post hoc event + minute tracking ----------
-    inhale_event_times = []   # exact inhale onset timestamps (in seconds from t0)
+    inhale_event_times = []
 
     current_minute_index = 0
     current_minute_count = 0
@@ -160,6 +151,12 @@ def main():
     last_db_send = time.time()
     DB_SEND_INTERVAL = 0.1
 
+    
+
+    # ---------- Debug print timing ----------
+    last_debug_print = 0.0
+    DEBUG_PRINT_EVERY = 0.25
+
     try:
         while True:
             line = ser.readline().decode(errors="ignore").strip()
@@ -177,7 +174,6 @@ def main():
             # -------- Finalize completed minute bins --------
             minute_index = int(t_sec // MINUTE_SEC)
             if minute_index > current_minute_index:
-                # finalize the previous minute
                 minute_records.append({
                     "participant_id": participant_id,
                     "minute_index": current_minute_index + 1,
@@ -188,7 +184,6 @@ def main():
                 })
                 last_completed_minute_bpm = float(current_minute_count)
 
-                # fill fully skipped empty minutes, if any
                 for skipped_idx in range(current_minute_index + 1, minute_index):
                     minute_records.append({
                         "participant_id": participant_id,
@@ -219,10 +214,9 @@ def main():
                 slow_ema = ema(slow_ema, tmp, alpha=0.05)
                 visual_sm = ema(visual_sm, tmp, alpha=VISUAL_ALPHA)
 
-                # Send temporary data so visuals can still react
                 if t - last_send >= send_period:
                     last_send = t
-                    osc.send_message("/fsr/raw", float(visual_sm))
+                    osc.send_message("/fsr/raw", float(tmp))
                     osc.send_message("/fsr/fast", float(fast_ema))
                     osc.send_message("/fsr/slow", float(slow_ema))
                     osc.send_message("/fsr/visual", float(visual_sm))
@@ -237,17 +231,30 @@ def main():
                     low = float(np.percentile(calib_buf, LOW_PCT))
                     high = float(np.percentile(calib_buf, HIGH_PCT))
 
+                    print(f"[CALIB DONE] low={low:.2f}, high={high:.2f}, range={high-low:.2f}")
+
                     if high - low < 5:
+                        print("[CALIB] range too small, recalibrating...")
                         calib_buf.clear()
                         calib_start = time.time()
+                        fast_ema = None
+                        slow_ema = None
+                        visual_sm = None
                         continue
 
                     calibrating = False
+                    calib_end_time = t
+
                     osc.send_message("/calib/active", 0)
                     osc.send_message("/calib/low", float(low))
                     osc.send_message("/calib/high", float(high))
 
-                    # Reset trackers after calibration
+                    # CRITICAL RESET
+                    fast_ema = None
+                    slow_ema = None
+                    visual_sm = None
+                    opacity_sm = None
+
                     base_ema = None
                     amp_ema = None
                     last_x = None
@@ -256,15 +263,46 @@ def main():
                     inhale_events.clear()
                     last_inhale_event_t = None
 
+                    # optional: seed drift window with calibration values
+                    window.clear()
+                    for v in calib_buf[-window.maxlen:]:
+                        window.append(v)
+
+                continue
+
+            # -------- SHORT POST-CALIBRATION CALM PERIOD --------
+            if calib_end_time is not None and (t - calib_end_time) < POST_CALM_SECONDS:
+                # kalibrasyon sonrası state'lerin oturması için çok kısa süre
+                norm = (raw - low) / max(1e-6, (high - low))
+                norm = max(0.0, min(1.0, norm))
+
+                fast_ema = ema(fast_ema, norm, alpha=0.35)
+                slow_ema = ema(slow_ema, norm, alpha=0.12)
+                visual_sm = ema(visual_sm, norm, alpha=0.20)
+
+                if t - last_send >= send_period:
+                    last_send = t
+                    osc.send_message("/fsr/raw", float(norm))
+                    osc.send_message("/fsr/fast", float(fast_ema))
+                    osc.send_message("/fsr/slow", float(slow_ema))
+                    osc.send_message("/fsr/visual", float(visual_sm))
+
+                    osc.send_message("/breath/state", 0)
+                    osc.send_message("/breath/inhale_event", 0)
+                    osc.send_message("/breath/bpm", 0.0)
+                    osc.send_message("/breath/bpm_minute", float(last_completed_minute_bpm))
+                    osc.send_message("/breath/opacity", 1.0)
+
                 continue
 
             # -------- DRIFT-ADAPTATION WINDOW --------
-            window.append(raw)
-            if len(window) >= DRIFT_UPDATE_MIN_SAMPLES:
-                low_new = float(np.percentile(window, LOW_PCT))
-                high_new = float(np.percentile(window, HIGH_PCT))
-                low = (1.0 - DRIFT_ALPHA) * low + DRIFT_ALPHA * low_new
-                high = (1.0 - DRIFT_ALPHA) * high + DRIFT_ALPHA * high_new
+            if USE_DRIFT_ADAPTATION:
+                window.append(raw)
+                if len(window) >= DRIFT_UPDATE_MIN_SAMPLES:
+                    low_new = float(np.percentile(window, LOW_PCT))
+                    high_new = float(np.percentile(window, HIGH_PCT))
+                    low = (1.0 - DRIFT_ALPHA) * low + DRIFT_ALPHA * low_new
+                    high = (1.0 - DRIFT_ALPHA) * high + DRIFT_ALPHA * high_new
 
             denom = high - low
             if denom < 1e-6:
@@ -274,8 +312,9 @@ def main():
             norm = (raw - low) / denom
             norm = max(0.0, min(1.0, norm))
 
+            # sphere için daha stabil görsel yol
             fast_ema = ema(fast_ema, norm, alpha=0.35)
-            slow_ema = ema(slow_ema, norm, alpha=0.05)
+            slow_ema = ema(slow_ema, norm, alpha=0.12)      # 0.05 yerine biraz hızlandırıldı
             visual_sm = ema(visual_sm, norm, alpha=VISUAL_ALPHA)
 
             sig = float(slow_ema)
@@ -283,9 +322,6 @@ def main():
             # -------- BASELINE + RELATIVE SIGNAL x --------
             base_ema = ema(base_ema, sig, BASELINE_ALPHA)
             x = sig - float(base_ema)
-
-            # If direction is inverted in your setup, uncomment this:
-            # x = -x
 
             # -------- DB WRITE --------
             db_buffer.append(raw)
@@ -336,28 +372,25 @@ def main():
                 refractory_ok = False
 
             if breath_state == "exhale":
-                # Inhale start = exhale -> inhale transition
                 if refractory_ok and x > +hyst and dxs > RISE_SLOPE_TH:
                     breath_state = "inhale"
                     inhale_event = True
                     last_inhale_event_t = t
                     inhale_events.append(t)
 
-                    # post hoc logging
                     inhale_event_times.append(t_sec)
                     current_minute_count += 1
-
-            else:  # inhale
+            else:
                 if x < -hyst and dxs < -FALL_SLOPE_TH:
                     breath_state = "exhale"
 
-            # -------- BPM WINDOW (20s rolling) --------
+            # -------- BPM WINDOW --------
             while inhale_events and (t - inhale_events[0]) > BPM_WINDOW_SEC:
                 inhale_events.popleft()
 
             bpm_win = float(len(inhale_events) * 60.0 / BPM_WINDOW_SEC)
 
-            # -------- OPACITY (directly from BPM) --------
+            # -------- OPACITY --------
             opacity_target = bpm_to_opacity(bpm_win)
 
             if opacity_sm is None:
@@ -368,12 +401,20 @@ def main():
 
             opacity = float(opacity_sm)
 
+            # -------- DEBUG PRINT --------
+            if t - last_debug_print >= DEBUG_PRINT_EVERY:
+                last_debug_print = t
+                print(
+                    f"raw={raw:.1f} | low={low:.1f} high={high:.1f} | "
+                    f"norm={norm:.3f} | visual={visual_sm:.3f} | "
+                    f"x={x:.3f} | hyst={hyst:.3f} | dx={dxs:.4f}"
+                )
+
             # -------- OSC --------
             if t - last_send >= send_period:
                 last_send = t
 
-                # visual signal is now separate
-                osc.send_message("/fsr/raw", float(visual_sm))
+                osc.send_message("/fsr/raw", float(norm))
                 osc.send_message("/fsr/fast", float(fast_ema))
                 osc.send_message("/fsr/slow", float(slow_ema))
                 osc.send_message("/fsr/visual", float(visual_sm))
@@ -385,7 +426,6 @@ def main():
                 osc.send_message("/breath/bpm_minute", float(last_completed_minute_bpm))
                 osc.send_message("/breath/opacity", float(opacity))
 
-                # Debug channels
                 osc.send_message("/breath/baseline", float(base_ema))
                 osc.send_message("/breath/x", float(x))
                 osc.send_message("/breath/hyst", float(hyst))
@@ -395,7 +435,6 @@ def main():
         print("Stopping...")
 
     finally:
-        # finalize the currently open minute bin
         final_t_sec = time.time() - t0
         minute_records.append({
             "participant_id": participant_id,
@@ -406,7 +445,6 @@ def main():
             "bpm_minute": float(current_minute_count)
         })
 
-        # write inhale event timestamps
         events_filename = f"breath_events_{participant_id}.csv"
         with open(events_filename, "w", newline="") as ef:
             writer = csv.writer(ef)
@@ -414,7 +452,6 @@ def main():
             for ev_t in inhale_event_times:
                 writer.writerow([participant_id, ev_t])
 
-        # write minute-by-minute BPM summary
         minutes_filename = f"breath_minute_bpm_{participant_id}.csv"
         with open(minutes_filename, "w", newline="") as mf:
             writer = csv.writer(mf)
