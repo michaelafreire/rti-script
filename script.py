@@ -11,7 +11,7 @@ from pythonosc.udp_client import SimpleUDPClient
 # CONFIG
 # =========================
 SERIAL_PORT = "COM4"
-BAUD = 9600
+BAUD = 115200
 print("it is pulled again!")
 
 TD_IP = "127.0.0.1"
@@ -19,7 +19,7 @@ TD_PORT = 7000
 
 CALIB_SECONDS = 20
 WINDOW_SECONDS = 60
-SEND_HZ = 50
+SEND_HZ = 150
 
 # ---- CONNECT TO SUPABASE ----
 #SUPABASE_URL = "https://mgcesnjdswtzcnxsqovi.supabase.co"
