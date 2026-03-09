@@ -145,7 +145,7 @@ def main():
     last_db_send = time.time()
     DB_SEND_INTERVAL = 0.1
 
-    
+
 
     # ---------- Debug print timing ----------
     last_debug_print = 0.0
@@ -434,26 +434,26 @@ def main():
                     rec["bpm_minute"]
                 ])
 
-        # ---- CONNECT TO SUPABASE ----
-        SUPABASE_URL = "https://mgcesnjdswtzcnxsqovi.supabase.co"
-        SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nY2Vzbmpkc3d0emNueHNxb3ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MzY3OTYsImV4cCI6MjA4ODIxMjc5Nn0.BTBtWstvyDeJj5L_0_5tfoAQvNN2lYlWAwH8-lfzX3Q"
+        # # ---- CONNECT TO SUPABASE ----
+        # SUPABASE_URL = "https://mgcesnjdswtzcnxsqovi.supabase.co"
+        # SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nY2Vzbmpkc3d0emNueHNxb3ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MzY3OTYsImV4cCI6MjA4ODIxMjc5Nn0.BTBtWstvyDeJj5L_0_5tfoAQvNN2lYlWAwH8-lfzX3Q"
 
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        # supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-        try:
-            # Upload inhale events
-            inhale_rows = [{"participant_id": participant_id, "inhale_event_t_sec": ev_t} for ev_t in inhale_event_times]
-            if inhale_rows:
-                supabase.table("breath_events").insert(inhale_rows).execute()
+        # try:
+        #     # Upload inhale events
+        #     inhale_rows = [{"participant_id": participant_id, "inhale_event_t_sec": ev_t} for ev_t in inhale_event_times]
+        #     if inhale_rows:
+        #         supabase.table("breath_events").insert(inhale_rows).execute()
 
-            # Upload minute records
-            if minute_records:
-                supabase.table("breath_minute_bpm").insert(minute_records).execute()
+        #     # Upload minute records
+        #     if minute_records:
+        #         supabase.table("breath_minute_bpm").insert(minute_records).execute()
 
-            print("Supabase upload done!")
-        
-        except Exception as e:
-            print("Supabase upload failed:", e)
+        #     print("Supabase upload done!")
+
+        # except Exception as e:
+        #     print("Supabase upload failed:", e)
 
         ser.close()
         print(f"Saved inhale events to {events_filename}")
