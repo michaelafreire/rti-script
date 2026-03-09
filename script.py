@@ -21,12 +21,6 @@ CALIB_SECONDS = 20
 WINDOW_SECONDS = 60
 SEND_HZ = 150
 
-# ---- CONNECT TO SUPABASE ----
-#SUPABASE_URL = "https://mgcesnjdswtzcnxsqovi.supabase.co"
-#SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nY2Vzbmpkc3d0emNueHNxb3ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MzY3OTYsImV4cCI6MjA4ODIxMjc5Nn0.BTBtWstvyDeJj5L_0_5tfoAQvNN2lYlWAwH8-lfzX3Q"
-
-#supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 # ---- CREATE PARTICIPANT ID ----
 participant_id = int(time.strftime("%Y%m%d%H%M%S"))
 
@@ -323,32 +317,6 @@ def main():
             base_ema = ema(base_ema, sig, BASELINE_ALPHA)
             x = sig - float(base_ema)
 
-            # -------- DB WRITE --------
-            #db_buffer.append(raw)
-            #db_buffer_norm.append(sig)
-            #db_buffer_wave.append(x)
-
-           # if time.time() - last_db_send >= DB_SEND_INTERVAL and db_buffer:
-             #   try:
-             #       avg_raw = float(np.mean(db_buffer))
-             #       avg_norm = float(np.mean(db_buffer_norm))
-             #       avg_wave = float(np.mean(db_buffer_wave))
-                    #t_flush = time.time() - t0
-                    #row = {
-                    #    "participant_id": participant_id,
-                    #    "t_sec": t_flush,
-                     #   "raw": avg_raw,
-                     #   "norm": avg_norm,
-                     #   "wave": avg_wave
-                   # }
-                    #supabase.table("breath_raw").insert([row]).execute()
-                    #db_buffer.clear()
-                    #db_buffer_norm.clear()
-                    #db_buffer_wave.clear()
-                    #last_db_send = time.time()
-               # except Exception as e:
-              #      print("Database error:", e)
-
             # -------- DYNAMIC HYSTERESIS --------
             amp_ema = ema(amp_ema, abs(x), AMP_ALPHA)
             amp = float(amp_ema if amp_ema is not None else 0.0)
@@ -465,6 +433,27 @@ def main():
                     rec["breath_count"],
                     rec["bpm_minute"]
                 ])
+
+        # ---- CONNECT TO SUPABASE ----
+        SUPABASE_URL = "https://mgcesnjdswtzcnxsqovi.supabase.co"
+        SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nY2Vzbmpkc3d0emNueHNxb3ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MzY3OTYsImV4cCI6MjA4ODIxMjc5Nn0.BTBtWstvyDeJj5L_0_5tfoAQvNN2lYlWAwH8-lfzX3Q"
+
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+        try:
+            # Upload inhale events
+            inhale_rows = [{"participant_id": participant_id, "inhale_event_t_sec": ev_t} for ev_t in inhale_event_times]
+            if inhale_rows:
+                supabase.table("breath_events").insert(inhale_rows).execute()
+
+            # Upload minute records
+            if minute_records:
+                supabase.table("breath_minute_bpm").insert(minute_records).execute()
+
+            print("Supabase upload done!")
+        
+        except Exception as e:
+            print("Supabase upload failed:", e)
 
         ser.close()
         print(f"Saved inhale events to {events_filename}")
