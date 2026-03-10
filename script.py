@@ -17,6 +17,7 @@ TD_IP = "127.0.0.1"
 TD_PORT = 7000
 
 CALIB_SECONDS = 20
+RUN_SECONDS = 7 * 60   # actual run duration after calibration
 WINDOW_SECONDS = 60
 SEND_HZ = 150
 
@@ -91,12 +92,16 @@ def main():
     osc = SimpleUDPClient(TD_IP, TD_PORT)
     t0 = time.time()
 
+    # session flag for TouchDesigner
+    osc.send_message("/session/done", 0)
+
     # ---------- Calibration ----------
     calib_buf = []
     calib_start = time.time()
     calibrating = True
     low, high = None, None
     calib_end_time = None
+    run_start_time = None
 
     # ---------- Filters ----------
     fast_ema = None
@@ -139,7 +144,7 @@ def main():
     last_debug_print = 0.0
     DEBUG_PRINT_EVERY = 0.25
 
-    # ---------- New debug-data storage ----------
+    # ---------- Debug-data storage ----------
     debug_records = []
 
     try:
@@ -155,33 +160,6 @@ def main():
 
             t = time.time()
             t_sec = t - t0
-
-            # -------- Finalize completed minute bins --------
-            minute_index = int(t_sec // MINUTE_SEC)
-            if minute_index > current_minute_index:
-                minute_records.append({
-                    "participant_id": participant_id,
-                    "minute_index": current_minute_index + 1,
-                    "start_sec": current_minute_index * MINUTE_SEC,
-                    "end_sec": (current_minute_index + 1) * MINUTE_SEC,
-                    "breath_count": current_minute_count,
-                    "bpm_minute": float(current_minute_count)
-                })
-                last_completed_minute_bpm = float(current_minute_count)
-
-                for skipped_idx in range(current_minute_index + 1, minute_index):
-                    minute_records.append({
-                        "participant_id": participant_id,
-                        "minute_index": skipped_idx + 1,
-                        "start_sec": skipped_idx * MINUTE_SEC,
-                        "end_sec": (skipped_idx + 1) * MINUTE_SEC,
-                        "breath_count": 0,
-                        "bpm_minute": 0.0
-                    })
-                    last_completed_minute_bpm = 0.0
-
-                current_minute_index = minute_index
-                current_minute_count = 0
 
             # -------- CALIBRATION --------
             if calibrating:
@@ -228,6 +206,7 @@ def main():
 
                     calibrating = False
                     calib_end_time = t
+                    run_start_time = t
 
                     osc.send_message("/calib/active", 0)
                     osc.send_message("/calib/low", float(low))
@@ -251,6 +230,40 @@ def main():
                         window.append(v)
 
                 continue
+
+            # -------- AUTO-STOP AFTER 7 MINUTES OF ACTUAL RUN --------
+            if run_start_time is not None and (t - run_start_time) >= RUN_SECONDS:
+                print("7-minute run completed. Stopping automatically...")
+                osc.send_message("/session/done", 1)
+                time.sleep(0.2)
+                break
+
+            # -------- Finalize completed minute bins --------
+            minute_index = int(t_sec // MINUTE_SEC)
+            if minute_index > current_minute_index:
+                minute_records.append({
+                    "participant_id": participant_id,
+                    "minute_index": current_minute_index + 1,
+                    "start_sec": current_minute_index * MINUTE_SEC,
+                    "end_sec": (current_minute_index + 1) * MINUTE_SEC,
+                    "breath_count": current_minute_count,
+                    "bpm_minute": float(current_minute_count)
+                })
+                last_completed_minute_bpm = float(current_minute_count)
+
+                for skipped_idx in range(current_minute_index + 1, minute_index):
+                    minute_records.append({
+                        "participant_id": participant_id,
+                        "minute_index": skipped_idx + 1,
+                        "start_sec": skipped_idx * MINUTE_SEC,
+                        "end_sec": (skipped_idx + 1) * MINUTE_SEC,
+                        "breath_count": 0,
+                        "bpm_minute": 0.0
+                    })
+                    last_completed_minute_bpm = 0.0
+
+                current_minute_index = minute_index
+                current_minute_count = 0
 
             # -------- SHORT POST-CALIBRATION CALM PERIOD --------
             if calib_end_time is not None and (t - calib_end_time) < POST_CALM_SECONDS:
@@ -415,7 +428,7 @@ def main():
             "bpm_minute": float(current_minute_count)
         })
 
-                debug_filename = f"breath_debug_{participant_id}.csv"
+        debug_filename = f"breath_debug_{participant_id}.csv"
         with open(debug_filename, "w", newline="") as df:
             writer = csv.writer(df)
             writer.writerow([
