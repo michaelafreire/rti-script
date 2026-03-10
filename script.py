@@ -415,23 +415,7 @@ def main():
             "bpm_minute": float(current_minute_count)
         })
 
-
-        from supabase import create_client
-        SUPABASE_URL = "https://mgcesnjdswtzcnxsqovi.supabase.co"
-        SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nY2Vzbmpkc3d0emNueHNxb3ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MzY3OTYsImV4cCI6MjA4ODIxMjc5Nn0.BTBtWstvyDeJj5L_0_5tfoAQvNN2lYlWAwH8-lfzX3Q"
-
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-        try:
-            if debug_records:
-                supabase.table("breath_debug").insert(debug_records).execute()
-            if minute_records:
-                supabase.table("breath_minute_bpm").insert(minute_records).execute()
-            print("Supabase upload done!")
-        except Exception as e:
-            print("Supabase upload failed:", e)
-
-        debug_filename = f"breath_debug_{participant_id}.csv"
+                debug_filename = f"breath_debug_{participant_id}.csv"
         with open(debug_filename, "w", newline="") as df:
             writer = csv.writer(df)
             writer.writerow([
@@ -471,9 +455,25 @@ def main():
                     rec["bpm_minute"]
                 ])
 
-        ser.close()
         print(f"Saved debug data to {debug_filename}")
         print(f"Saved minute BPM summary to {minutes_filename}")
+
+        from supabase import create_client
+        SUPABASE_URL = "https://mgcesnjdswtzcnxsqovi.supabase.co"
+        SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1nY2Vzbmpkc3d0emNueHNxb3ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MzY3OTYsImV4cCI6MjA4ODIxMjc5Nn0.BTBtWstvyDeJj5L_0_5tfoAQvNN2lYlWAwH8-lfzX3Q"
+
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+        try:
+            if debug_records:
+                supabase.table("breath_debug").insert(debug_records).execute()
+            if minute_records:
+                supabase.table("breath_minute_bpm").insert(minute_records).execute()
+            print("Supabase upload done!")
+        except Exception as e:
+            print("Supabase upload failed:", e)
+
+        ser.close()
 
 
 if __name__ == "__main__":
