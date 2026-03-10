@@ -11,7 +11,7 @@ from pythonosc.udp_client import SimpleUDPClient
 # =========================
 SERIAL_PORT = "COM4"
 BAUD = 115200
-print("it is pulled again!")
+print("it is pulled again and again!")
 
 TD_IP = "127.0.0.1"
 TD_PORT = 7000
