@@ -19,7 +19,7 @@ TD_PORT = 7000
 CALIB_SECONDS = 20
 RUN_SECONDS = 7 * 60   # actual run duration after calibration
 WINDOW_SECONDS = 60
-SEND_HZ = 150
+SEND_HZ = 100
 
 # ---- CREATE PARTICIPANT ID ----
 participant_id = int(time.strftime("%Y%m%d%H%M%S"))
@@ -33,17 +33,21 @@ DRIFT_ALPHA = 0.02
 # ---- Baseline-relative breath detection ----
 BASELINE_ALPHA = 0.005
 
-# Dynamic hysteresis (x = sig - baseline)
-MIN_HYST = 0.010
-HYST_GAIN = 0.35
+# ---- Dynamic hysteresis (x = sig - baseline) ----
+MIN_HYST = 0.008
+HYST_GAIN = 0.25
 AMP_ALPHA = 0.05
 
-# Slope gating
-RISE_SLOPE_TH = 0.0012
-FALL_SLOPE_TH = 0.0012
+# ---- Slope gating ----
+RISE_SLOPE_TH = 0.0008
+FALL_SLOPE_TH = 0.0006
 DSIG_EMA_ALPHA = 0.25
 
-# Refractory
+# ---- Confirmation / debounce ----
+INHALE_CONFIRM_SEC = 0.02
+EXHALE_CONFIRM_SEC = 0.03
+
+# ---- Refractory ----
 MIN_BREATH_INTERVAL = 0.8
 
 # ---- BPM window ----
@@ -121,6 +125,9 @@ def main():
 
     last_x = None
     dx_ema = None
+
+    inhale_candidate_start = None
+    exhale_candidate_start = None
 
     # inhale-start event timestamps for BPM window
     inhale_events = deque()
@@ -224,6 +231,8 @@ def main():
                     breath_state = "exhale"
                     inhale_events.clear()
                     last_inhale_event_t = None
+                    inhale_candidate_start = None
+                    exhale_candidate_start = None
 
                     window.clear()
                     for v in calib_buf[-window.maxlen:]:
@@ -310,7 +319,8 @@ def main():
             slow_ema = ema(slow_ema, norm, alpha=0.12)
             visual_sm = ema(visual_sm, norm, alpha=VISUAL_ALPHA)
 
-            sig = float(slow_ema)
+            # detection signal: responsive but not too noisy
+            sig = float(0.7 * slow_ema + 0.3 * fast_ema)
 
             # -------- BASELINE + RELATIVE SIGNAL x --------
             base_ema = ema(base_ema, sig, BASELINE_ALPHA)
@@ -339,15 +349,37 @@ def main():
                 refractory_ok = False
 
             if breath_state == "exhale":
-                if refractory_ok and x > +hyst and dxs > RISE_SLOPE_TH:
-                    breath_state = "inhale"
-                    inhale_event = True
-                    last_inhale_event_t = t
-                    inhale_events.append(t)
-                    current_minute_count += 1
+                inhale_condition = refractory_ok and (x > +hyst) and (dxs > RISE_SLOPE_TH)
+
+                if inhale_condition:
+                    if inhale_candidate_start is None:
+                        inhale_candidate_start = t
+
+                    if (t - inhale_candidate_start) >= INHALE_CONFIRM_SEC:
+                        breath_state = "inhale"
+                        inhale_event = True
+                        last_inhale_event_t = t
+                        inhale_events.append(t)
+                        current_minute_count += 1
+
+                        inhale_candidate_start = None
+                        exhale_candidate_start = None
+                else:
+                    inhale_candidate_start = None
+
             else:
-                if x < -hyst and dxs < -FALL_SLOPE_TH:
-                    breath_state = "exhale"
+                exhale_condition = (x < 0.8 * hyst) and (dxs < -FALL_SLOPE_TH)
+
+                if exhale_condition:
+                    if exhale_candidate_start is None:
+                        exhale_candidate_start = t
+
+                    if (t - exhale_candidate_start) >= EXHALE_CONFIRM_SEC:
+                        breath_state = "exhale"
+                        exhale_candidate_start = None
+                        inhale_candidate_start = None
+                else:
+                    exhale_candidate_start = None
 
             # -------- BPM WINDOW --------
             while inhale_events and (t - inhale_events[0]) > BPM_WINDOW_SEC:
@@ -457,7 +489,10 @@ def main():
         minutes_filename = f"breath_minute_bpm_{participant_id}.csv"
         with open(minutes_filename, "w", newline="") as mf:
             writer = csv.writer(mf)
-            writer.writerow(["participant_id", "minute_index", "start_sec", "end_sec", "breath_count", "bpm_minute"])
+            writer.writerow([
+                "participant_id", "minute_index", "start_sec",
+                "end_sec", "breath_count", "bpm_minute"
+            ])
             for rec in minute_records:
                 writer.writerow([
                     rec["participant_id"],
